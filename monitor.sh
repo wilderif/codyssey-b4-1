@@ -60,11 +60,11 @@ append_sample() { # Rotate and append while the caller holds the log lock.
     if [[ -e $active ]]; then # Validate an existing active log before opening it.
         [[ $(stat -c %h "$active") == 1 ]] || fail 'monitor.log has unexpected hard links.' # Avoid altering another path's data.
     else # Create only a missing active log.
-        : > "$active" # Preserve all existing log contents.
+        : > "$active" || fail 'Cannot create monitor.log.' # Preserve all existing log contents.
     fi # End active-log initialization.
-    chgrp agent-core "$active" # Keep group access restricted to core.
-    chmod 0660 "$active" # Preserve read/write access without exposing other users.
-    size=$(stat -c %s "$active") # Read the actual current byte count.
+    chgrp agent-core "$active" || fail 'Cannot set monitoring log group.' # Keep group access restricted to core.
+    chmod 0660 "$active" || fail 'Cannot set monitoring log permissions.' # Preserve restricted read/write access.
+    size=$(stat -c %s "$active") || fail 'Cannot read monitoring log size.' # Read the actual current byte count.
     bytes=$(LC_ALL=C printf '%s\n' "$sample" | wc -c) # Include the appended newline in the size calculation.
     [[ $bytes -le 10000000 ]] || fail 'A monitoring sample exceeds the log size limit.' # Reject an impossible oversized sample.
     if (( size + bytes > 10000000 )); then # Rotate only when the next sample would exceed the decimal 10MB limit.
@@ -75,10 +75,10 @@ append_sample() { # Rotate and append while the caller holds the log lock.
             rm -f -- "$temporary" # Remove only the newly created incomplete staging file.
             fail 'Log compression failed; active log preserved.' # Retain the useful original data.
         fi # End compression validation.
-        chgrp agent-core "$temporary" # Keep the staged archive core-only.
-        chmod 0660 "$temporary" # Set retained archive permissions explicitly.
-        mv -T "$temporary" "$archive" # Publish the verified compressed archive atomically.
-        : > "$active" # Clear the active file only after its archive exists.
+        chgrp agent-core "$temporary" || fail 'Cannot set archive group; active log preserved.' # Keep the staged archive core-only.
+        chmod 0660 "$temporary" || fail 'Cannot set archive permissions; active log preserved.' # Restrict retained archive access.
+        mv -T "$temporary" "$archive" || fail 'Cannot publish archive; active log preserved.' # Publish the verified archive atomically.
+        : > "$active" || fail 'Cannot reopen monitor.log after archiving.' # Clear the active file only after its archive exists.
         printf '[OK] Monitoring log rotated\n' # Report a successful rotation.
     fi # End size-triggered rotation.
     names=$(find "$directory" -maxdepth 1 -regextype posix-extended -type f -regex '.*/monitor\.log\.[0-9]{19}\.gz' -printf '%f\n' | sort) || fail 'Cannot enumerate monitoring archives.' # Check retention collection failures explicitly.
@@ -86,10 +86,10 @@ append_sample() { # Rotate and append while the caller holds the log lock.
         [[ -z $name ]] || archives+=("$directory/$name") # Keep the deletion list within the requested directory.
     done <<< "$names" # Order archives from oldest to newest.
     while (( ${#archives[@]} > 9 )); do # Retain up to nine compressed files plus the active log.
-        rm -- "${archives[0]}" # Delete only the oldest monitoring archive.
+        rm -- "${archives[0]}" || fail 'Cannot delete oldest monitoring archive.' # Delete only the oldest monitoring archive.
         archives=("${archives[@]:1}") # Continue until retention is satisfied.
     done # End retention cleanup.
-    printf '%s\n' "$sample" >> "$active" # Append the completed sample after successful rotation and cleanup.
+    printf '%s\n' "$sample" >> "$active" || fail 'Cannot append monitoring sample.' # Append only after successful rotation and cleanup.
 } # End safe sample recording.
 
 main() { # Run the selected assignment monitor as its ordinary account.

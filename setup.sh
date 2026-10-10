@@ -40,7 +40,10 @@ prepare_directory() { # Set policy on the directory itself without rewriting exi
 
 [[ $EUID -eq 0 ]] || fail 'Run setup as root inside the Linux container.' # Require administrative setup privileges.
 [[ $# -eq 0 ]] || fail 'This setup accepts no arguments.' # Avoid unsupported configuration choices.
-for tool in getent groupadd useradd usermod install setfacl runuser ss ufw iptables ip6tables file readelf ldd cmp flock visudo crontab awk stat sha256sum; do # Check prerequisites before mutation.
+exec 8> /run/agent-setup.lock # Keep simultaneous setup runs from changing the same configuration.
+flock -n 8 || fail 'Another setup is already running.' # Refuse overlapping administrative changes.
+[[ $(readlink -f /proc/1/exe) == /usr/sbin/sshd ]] || fail 'Start this container with start.sh before setup.' # Reload only the intended PID 1 SSH daemon.
+for tool in getent groupadd useradd usermod install setfacl getfacl runuser ss ufw iptables ip6tables file readelf ldd cmp flock visudo crontab awk stat sha256sum; do # Check prerequisites before mutation.
     command -v "$tool" >/dev/null || fail "Missing tool: $tool" # Identify the missing package.
 done # Finish command checks.
 source /etc/os-release # Read the actual container operating system.
@@ -62,6 +65,11 @@ fi # End membership conflict check.
 for path in /home/agent-admin "$agent_home" "$agent_home/upload_files" "$agent_home/api_keys" "$agent_home/bin" /var/log/agent-app /var/lib/agent-evidence; do # Validate managed directory types.
     [[ ! -L $path && ( ! -e $path || -d $path ) ]] || fail "Directory conflict: $path" # Avoid following a substituted directory.
 done # End directory type checks.
+for path in "$agent_home/upload_files" "$agent_home/api_keys" "$agent_home/bin" /var/log/agent-app /var/lib/agent-evidence; do # Inspect existing shared paths before changing their access policy.
+    if [[ -d $path ]]; then # Allow only the selected owner/group ACL structure.
+        getfacl -cp "$path" | awk '/^(default:)?(user|group):[^:]+:/ {exit 1}' || fail "Unexpected named ACL: $path" # Reject hidden extra grants rather than silently retaining them.
+    fi # End existing ACL preflight.
+done # End access conflict scan.
 if [[ -e $key_file || -L $key_file ]]; then # Inspect an existing fixture before applying permissions.
     [[ -f $key_file && ! -L $key_file ]] && cmp -s "$key_file" <(printf 'agent_api_key_test\n') || fail 'Key fixture conflict; existing data preserved.' # Require the exact single-line fixture.
 fi # End fixture preflight.
@@ -142,8 +150,11 @@ if [[ -f /workspace/monitor.sh ]]; then # Install and schedule only a real monit
     bash -n /workspace/monitor.sh # Reject syntactically invalid monitoring code.
     install -o agent-dev -g agent-core -m 0750 /workspace/monitor.sh "$agent_home/bin/.monitor.sh.new" # Prepare the replacement with intended ownership.
     mv -f "$agent_home/bin/.monitor.sh.new" "$agent_home/bin/monitor.sh" # Replace the script atomically.
-    old_cron=$(crontab -u agent-admin -l 2>/dev/null || true) # Preserve an existing user's crontab.
-    clean_cron=$(awk '/^# BEGIN agent-monitor$/ {skip=1; next} /^# END agent-monitor$/ {skip=0; next} !skip {print}' <<< "$old_cron") # Remove only the previous managed block.
+    if ! old_cron=$(crontab -u agent-admin -l 2>&1); then # Distinguish a missing table from a real read failure.
+        [[ $old_cron == 'no crontab for agent-admin' ]] || fail "Cannot read crontab: $old_cron" # Do not overwrite a table after an unexpected error.
+        old_cron='' # Treat a genuinely absent crontab as empty.
+    fi # End crontab read validation.
+    clean_cron=$(awk '/^# BEGIN agent-monitor$/ {if (skip) exit 1; skip=1; next} /^# END agent-monitor$/ {if (!skip) exit 1; skip=0; next} !skip {print} END {if (skip) exit 1}' <<< "$old_cron") || fail 'Malformed managed cron block; existing crontab preserved.' # Reject broken markers before removing a managed block.
     { # Build one idempotent block after unrelated entries.
         printf '%s\n' "$clean_cron" # Keep all unmanaged entries.
         printf '# BEGIN agent-monitor\n' # Mark the start of managed scheduling.
