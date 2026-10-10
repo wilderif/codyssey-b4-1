@@ -1,0 +1,3 @@
+# The image installs packages only; runtime sources use a read-only mount.
+*
+!Dockerfile
