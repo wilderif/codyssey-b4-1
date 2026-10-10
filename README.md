@@ -26,6 +26,7 @@ ssh -p 20022 agent-admin@127.0.0.1
 SSH의 admin 세션에서 환경을 지정한다.
 
 ```bash
+umask 0007
 export AGENT_HOME=/home/agent-admin/agent-app
 export AGENT_PORT=15034
 export AGENT_UPLOAD_DIR="$AGENT_HOME/upload_files"
@@ -66,7 +67,19 @@ tail -n 5 /var/log/agent-app/monitor.log
 
 ## 데이터 보존과 문제 확인
 
-앱 데이터·로그·증거는 전용 named volume에 저장한다. 컨테이너 시작·재시작 후에는 setup을 명시적으로 실행해 방화벽을 적용한다. 재생성 후에는 비밀번호도 다시 설정한다. `docker compose down`은 볼륨을 보존하며, 데이터가 필요하면 `down -v`를 사용하지 않는다.
+앱 데이터·로그·증거는 Git에서 제외된 호스트 `logs/`를 바인드 마운트해 저장한다.
+
+| 호스트 경로 | 컨테이너 경로 |
+| --- | --- |
+| `logs/app-data/` | `/home/agent-admin/agent-app` |
+| `logs/agent-app/` | `/var/log/agent-app` |
+| `logs/evidence/` | `/var/lib/agent-evidence` |
+
+컨테이너 시작·재시작 후에는 SSH 시작을 확인한 뒤 setup을 명시적으로 실행해 방화벽을 적용한다. 재생성 후에는 비밀번호도 다시 설정한다. `docker compose down`은 호스트의 `logs/`를 삭제하지 않는다.
+
+호스트 공유 파일시스템은 기본 ACL을 지원하지 않아 공유 디렉토리는 setgid·그룹 권한과 로그인 세션·cron의 `umask 0007`을 사용한다. 개인 home의 traversal ACL은 컨테이너 파일시스템에 유지한다. 기본 ACL 요구사항과 다른 방식이며, 쉘 세션에서 umask를 바꾸거나 명령에서 파일 모드를 직접 제한하면 그룹 쓰기 권한이 보장되지 않는다.
+
+현재 VirtioFS에서는 `chown`·setgid 적용 후에도 소유권과 접근 제한이 유지되지 않아 setup 검증이 실패했다. 소유권·setgid를 지원하는 파일 공유 방식으로 전환한 뒤 일반 계정 접근을 다시 검증해야 한다. 앱 실행·cron 검증은 아직 완료되지 않았다.
 
 | 증상 | 확인과 조치 |
 | --- | --- |
@@ -75,9 +88,10 @@ tail -n 5 /var/log/agent-app/monitor.log
 | 재생성 후 SSH 호스트 키 변경 | 컨테이너의 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`로 지문을 확인한 뒤 해당 localhost 기록 갱신. |
 | UFW 설정 실패 | `NET_ADMIN`, `iptables -L -n`, `ufw status verbose` 확인. privileged 모드로 우회하지 않음. |
 | 권한·키 충돌 | `id`, `getfacl`, `readlink`로 확인하고 기존 데이터를 검토한 뒤 충돌 해결. |
+| 바인드 마운트 권한 검증 실패 | `stat` 소유자·그룹·setgid와 일반 계정 접근을 확인. Docker Desktop 파일 공유 설정을 검토하고 권한 검사를 생략하지 않음. |
 | 앱 실행 실패 | 실제 Boot 출력과 `ldd` 결과 확인. 앱을 Root로 실행하거나 검사를 변경하지 않음. |
 | cron 기록 없음 | 앱 실행 상태, admin의 `crontab -l`, cron 프로세스와 `/var/lib/agent-evidence/cron.log` 확인. |
 
-4-2를 시작할 때 검증된 Dockerfile을 복사하고 원본 커밋 또는 체크섬을 기록한다. 이미지·컨테이너·볼륨은 별도로 만들고 계정·ACL·cron 전체를 복사하지 않는다.
+4-2를 시작할 때 검증된 Dockerfile을 복사하고 원본 커밋 또는 체크섬을 기록한다. 이미지·컨테이너·호스트 저장 경로는 별도로 만들고 계정·권한·cron 전체를 복사하지 않는다.
 
 제출물: [수행 내역서](docs/report.md), [모니터링 소스](monitor.sh).

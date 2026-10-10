@@ -15,13 +15,8 @@ services:
       - "127.0.0.1:15034:15034"
 
     volumes:
-      # Keep source read-only and preserve app data, logs, and evidence.
+      # Keep source read-only and store runtime data in the ignored logs directory.
       - .:/workspace:ro
-      - app_data:/home/agent-admin/agent-app
-      - app_logs:/var/log/agent-app
-      - evidence:/var/lib/agent-evidence
-
-volumes:
-  app_data:
-  app_logs:
-  evidence:
+      - ./logs/app-data:/home/agent-admin/agent-app
+      - ./logs/agent-app:/var/log/agent-app
+      - ./logs/evidence:/var/lib/agent-evidence

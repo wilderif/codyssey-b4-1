@@ -11,16 +11,18 @@ key_file=$agent_home/api_keys/t_secret.key
 key_link=$agent_home/api_keys/secret.key
 ssh_file=/etc/ssh/sshd_config.d/00-agent.conf
 sudo_file=/etc/sudoers.d/agent-ufw-status
+umask_file=/etc/profile.d/agent-umask.sh
 accounts=(agent-admin:2001 agent-dev:2002 agent-test:2003)
 ssh_settings=$'Port 20022\nPermitRootLogin no\nPasswordAuthentication yes\n'
 sudo_settings=$'agent-admin ALL=(root) NOPASSWD: /usr/sbin/ufw status\n'
+umask_settings=$'case "$USER" in\n    agent-admin|agent-dev|agent-test) umask 0007 ;;\nesac\n'
 
 fail() {
     printf '[ERROR] %s\n' "$*" >&2
     exit 1
 }
 
-# Stable numeric identities preserve ownership on persistent volumes.
+# Stable numeric identities preserve ownership across container recreation.
 check_group() {
     local name=$1 number=$2 entry
 
@@ -45,12 +47,13 @@ check_user() {
 }
 
 prepare_directory() {
-    local path=$1 group=$2
+    local path=$1 group=$2 group_id
 
-    # Set directory policy without changing existing files and subdirectories.
+    # Host bind mounts do not support default ACLs; use setgid and session umask.
     install -d -o agent-admin -g "$group" -m 2770 "$path"
-    setfacl -m u::rwx,g::rwx,m::rwx,o::--- "$path"
-    setfacl -m d:u::rwx,d:g::rwx,d:m::rwx,d:o::--- "$path"
+    group_id=$(getent group "$group" | cut -d: -f3)
+    [[ $(stat -c '%u:%g:%a' "$path") == "2001:$group_id:2770" ]] \
+        || fail "Bind mount does not preserve Linux ownership/setgid: $path"
 }
 
 # Check prerequisites before changing accounts, data, or configuration.
@@ -58,7 +61,7 @@ prepare_directory() {
 [[ $# -eq 0 ]] || fail 'This setup accepts no arguments.'
 for tool in getent groupadd useradd usermod install setfacl getfacl runuser ufw \
     iptables ip6tables file ldd cmp flock visudo crontab awk sha256sum \
-    readlink uname grep tee id tr cut chown chmod ln unlink mv bash; do
+    readlink uname grep tee id tr cut chown chmod ln unlink mv bash stat; do
     command -v "$tool" >/dev/null || fail "Missing tool: $tool"
 done
 
@@ -138,6 +141,12 @@ if [[ -e $sudo_file || -L $sudo_file ]]; then
         || fail 'Managed sudo configuration differs.'
 fi
 
+if [[ -e $umask_file || -L $umask_file ]]; then
+    [[ -f $umask_file && ! -L $umask_file ]] \
+        && cmp -s "$umask_file" <(printf '%s' "$umask_settings") \
+        || fail 'Managed umask configuration differs.'
+fi
+
 # Create accounts and apply shared/core directory permissions.
 for pair in "${accounts[@]}" agent-common:2101 agent-core:2102; do
     getent group "${pair%:*}" >/dev/null || groupadd -g "${pair#*:}" "${pair%:*}"
@@ -155,14 +164,18 @@ usermod -aG agent-core agent-dev
 chown agent-admin:agent-admin /home/agent-admin
 chmod 0700 /home/agent-admin
 setfacl -m g:agent-common:--x,m::--x /home/agent-admin
-install -d -o agent-admin -g agent-admin -m 0700 "$agent_home"
-setfacl -m g:agent-common:--x,m::--x "$agent_home"
+# The application parent is a bind mount: group execute grants traversal only.
+install -d -o agent-admin -g agent-common -m 0710 "$agent_home"
 
 prepare_directory "$agent_home/upload_files" agent-common
 prepare_directory "$agent_home/api_keys" agent-core
 prepare_directory "$agent_home/bin" agent-core
 prepare_directory /var/log/agent-app agent-core
 prepare_directory /var/lib/agent-evidence agent-core
+
+# Login shells inherit group write access without exposing new files to others.
+printf '%s' "$umask_settings" > "$umask_file"
+chmod 0644 "$umask_file"
 
 # Install only missing app/key data and preserve matching existing contents.
 if [[ ! -e $installed_app ]]; then
@@ -239,7 +252,7 @@ clean_cron=$(awk '
 {
     printf '%s\n' "$clean_cron"
     printf '# BEGIN agent-monitor\n'
-    printf '* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '
+    printf '* * * * * umask 0007; PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '
     printf 'AGENT_HOME=%s AGENT_PORT=15034 ' "$agent_home"
     printf 'AGENT_UPLOAD_DIR=%s/upload_files AGENT_KEY_PATH=%s/api_keys ' "$agent_home" "$agent_home"
     printf 'AGENT_LOG_DIR=/var/log/agent-app %s/bin/monitor.sh >> /var/lib/agent-evidence/cron.log 2>&1\n' "$agent_home"
