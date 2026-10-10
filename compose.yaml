@@ -1,29 +1,27 @@
-# Keep all resources separate from other assignments.
 name: codyssey-b4-1
+
 services:
   agent:
-    # Build the package-only Ubuntu image for the supplied ARM64 app.
     build: .
     image: codyssey-b4-1:local
     platform: linux/arm64
-    # Grant only the extra capability required by UFW.
-    cap_add:
-      - NET_ADMIN
-    # Start services without automatically preparing or launching the app.
+
+    # UFW requires NET_ADMIN; startup runs SSH and cron only.
+    cap_add: [NET_ADMIN]
     command: ["/bin/bash", "/workspace/start.sh"]
+
     ports:
-      # Publish only the two assignment ports on the local host.
       - "127.0.0.1:20022:20022"
       - "127.0.0.1:15034:15034"
+
     volumes:
-      # Source files and supplied binaries remain unchanged.
+      # Keep source read-only and preserve app data, logs, and evidence.
       - .:/workspace:ro
-      # Preserve app data, logs, and evidence independently.
       - app_data:/home/agent-admin/agent-app
       - app_logs:/var/log/agent-app
       - evidence:/var/lib/agent-evidence
+
 volumes:
-  # Docker manages three project-specific persistent volumes.
   app_data:
   app_logs:
   evidence:
