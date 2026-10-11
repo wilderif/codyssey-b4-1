@@ -1,97 +1,60 @@
 # Linux 보안·모니터링 실습
 
-Ubuntu 22.04 ARM64 컨테이너에서 제공 앱을 일반 계정으로 실행하고 Bash·cron으로 상태와 시스템 자원을 기록한다.
+Ubuntu 22.04 ARM64에서 제공 앱을 일반 계정으로 실행하고 Bash·cron으로 상태와 자원을 기록한다. 제출물은 [수행 내역서](docs/report.md)와 [monitor.sh](scripts/monitor.sh)다.
 
-## 준비와 설정
+## 준비
 
-Docker Desktop을 실행하고 `agent-app/agent-app-linux-arm64`를 준비한다. 바이너리는 별도 제공 파일이며 Git에 포함하지 않는다.
+Docker Desktop과 `agent-app/agent-app-linux-arm64`가 필요하다.
 
 ```bash
-docker info
 docker compose build
 docker compose up -d
-docker compose exec agent bash /workspace/setup.sh
+docker compose exec agent bash /workspace/scripts/setup.sh
 docker compose exec agent passwd agent-admin
 ssh -p 20022 agent-admin@127.0.0.1
 ```
 
-- 호스트 포트는 `127.0.0.1:20022`, `127.0.0.1:15034`만 공개한다. 컨테이너 UFW는 `NET_ADMIN`으로 관리한다.
-- `start.sh`는 SSH·cron만 시작한다. setup과 앱 실행은 명시적으로 수행한다.
-- admin/dev/test는 common에, admin/dev는 core에도 포함된다. 업로드는 common, 키·로그·monitor는 core 접근으로 제한한다.
-- setup 재실행은 기존 데이터·로그를 보존한다. 키·계정·규칙 충돌은 덮어쓰지 않고 중단한다.
-- 비밀번호는 런타임에서 직접 입력한다. 검증을 마친 현재 admin 계정은 잠겨 있으므로 사용 전에 위 `passwd` 명령을 실행한다.
+- [start.sh](scripts/start.sh)는 SSH·cron만 시작한다. 재시작·재생성 후에는 [setup.sh](scripts/setup.sh)를 다시 실행한다. 비밀번호는 대화형으로 설정하며 재생성 후 다시 설정한다.
+- SSH는 20022이며 Root 로그인을 차단한다. UFW는 TCP 20022·15034만 허용하고, 호스트에는 두 포트를 localhost로만 공개한다. UFW 적용에 `NET_ADMIN`을 사용한다.
+- 세 계정 모두 `agent-common`, admin/dev만 `agent-core`에 속한다. 업로드는 common, 키·로그·monitor는 core 접근으로 제한하며 setgid·기본 ACL로 그룹 접근을 유지한다.
+- 데이터·로그는 전용 named volume `app_data`·`app_logs`에 저장한다. setup은 기존 키·로그를 보존하며 키 충돌 시 중단한다. `docker compose down`은 볼륨을 보존하고, `down -v`는 삭제한다.
 
 ## 앱 실행
 
-SSH의 admin 세션에서 환경을 지정한다.
+SSH의 `agent-admin` 세션에서 실행하고 **Ctrl+C**로 종료한다.
 
 ```bash
-umask 0007
 export AGENT_HOME=/home/agent-admin/agent-app
 export AGENT_PORT=15034
 export AGENT_UPLOAD_DIR="$AGENT_HOME/upload_files"
 export AGENT_KEY_PATH="$AGENT_HOME/api_keys"
 export AGENT_LOG_DIR=/var/log/agent-app
-```
-
-최초 검증에서는 명세 경로로 먼저 실행하고, 종료·포트 해제 후 선택 설정을 검사한다.
-
-```bash
-AGENT_KEY_PATH="$AGENT_HOME/api_keys/t_secret.key" "$AGENT_HOME/agent-app-linux-arm64"
-ss -ltn 'sport = :15034'
 "$AGENT_HOME/agent-app-linux-arm64"
 ```
 
-명세의 파일형 키 경로는 실제 앱에서 거부되었다. 선택한 디렉토리형 경로와 `secret.key -> t_secret.key` 상대 링크는 **승인된 호환 예외**다. fixture 내용은 `agent_api_key_test` 한 줄이며 setup에서 생성한다.
+명세의 파일형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key`는 앱이 `Key Path Mismatch`로 거부했다. 디렉토리형 설정과 `secret.key -> t_secret.key` 상대 링크는 **승인된 호환 예외**다. 키 내용은 `agent_api_key_test` 한 줄이다.
 
-Boot 5단계 `[OK]`, `Agent READY`, 로그 초기화와 실제 `0.0.0.0:15034` 리슨을 확인한다. 앱은 foreground에서 실행하고 **Ctrl+C로 종료**한다. 다른 admin 터미널에서 `ss -ltnp 'sport = :15034'`로 확인할 수 있다.
+Boot 5단계 `[OK]`, `Agent READY`, 로그 초기화와 `0.0.0.0:15034` 리슨을 확인한다.
 
 ## 모니터링
 
 앱 실행 중 다른 admin 세션에서 확인한다.
 
 ```bash
+ss -ltnp 'sport = :15034'
 /home/agent-admin/agent-app/bin/monitor.sh
 crontab -l
 tail -n 5 /var/log/agent-app/monitor.log
 ```
 
-- 설치된 `monitor.sh`는 `agent-dev:agent-core`, 권한 `750`이며 admin의 cron에서 매분 실행된다. 앱이 종료된 상태에서는 상태 검사 오류가 발생하고 샘플을 추가하지 않는다.
-- CPU는 `/proc/stat`의 1초 변화량, 메모리는 `MemTotal`·`MemAvailable`, 디스크는 `df /`로 계산한다. Docker Linux에서 보이는 시스템 전체 값이며 macOS 또는 컨테이너 할당량 기준 사용률이 아니다.
-- 경고 기준은 CPU `>20%`, MEM `>10%`, DISK_USED `>80%`다. UFW 비활성·조회 실패와 임계값 경고는 수집을 중단하지 않는다.
-- 다음 행으로 10,000,000바이트를 초과하면 압축 회전한다. 활성 로그 1개·압축 로그 최대 9개를 유지하며 앱의 `agent_app.log`는 건드리지 않는다.
+- monitor는 `agent-dev:agent-core`, 권한 `750`이며 admin의 cron에서 매분 실행된다. 리슨 PID의 실행 파일·계정을 확인하고 앱·포트 이상이면 종료 코드 1을 반환한다.
+- CPU는 `vmstat 1 2`의 두 번째 표본에서 `100-idle`, 메모리는 `(MemTotal-MemAvailable)/MemTotal`, 디스크는 `df -P /`로 수집한다. 컨테이너에서 보이는 Docker Linux 시스템 기준이다.
+- CPU `>20%`, MEM `>10%`, DISK_USED `>80%`이면 경고한다. 임계값 초과와 UFW 비활성·조회 실패는 수집을 중단하지 않는다.
+- 다음 행으로 10,000,000바이트를 초과하면 Bash에서 압축·회전한다. 활성 `monitor.log`와 `.1.gz`~`.9.gz`까지 최대 열 개를 유지하며 앱 로그는 변경하지 않는다.
+- cron 오류는 `/var/log/agent-app/cron.log`에서 확인한다. 로그가 늘지 않으면 앱 실행 상태와 admin crontab을 확인한다.
 
 ```text
 [YYYY-MM-DD HH:MM:SS] PID:... CPU:..% MEM:..% DISK_USED:..%
 ```
 
-## 데이터 보존과 문제 확인
-
-앱 데이터·로그·증거는 Git에서 제외된 호스트 `logs/`를 바인드 마운트해 저장한다.
-
-| 호스트 경로 | 컨테이너 경로 |
-| --- | --- |
-| `logs/app-data/` | `/home/agent-admin/agent-app` |
-| `logs/agent-app/` | `/var/log/agent-app` |
-| `logs/evidence/` | `/var/lib/agent-evidence` |
-
-컨테이너 시작·재시작 후에는 SSH 시작을 확인한 뒤 setup을 명시적으로 실행해 방화벽을 적용한다. 재생성 후에는 비밀번호도 다시 설정한다. `docker compose down`은 호스트의 `logs/`를 삭제하지 않는다.
-
-호스트 공유 파일시스템은 기본 ACL을 지원하지 않아 공유 디렉토리는 setgid·그룹 권한과 로그인 세션·cron의 `umask 0007`을 사용한다. 개인 home의 traversal ACL은 컨테이너 파일시스템에 유지한다. 기본 ACL 요구사항과 다른 방식이며, 쉘 세션에서 umask를 바꾸거나 명령에서 파일 모드를 직접 제한하면 그룹 쓰기 권한이 보장되지 않는다.
-
-현재 VirtioFS에서는 `chown`·setgid 적용 후에도 소유권과 접근 제한이 유지되지 않아 setup 검증이 실패했다. 소유권·setgid를 지원하는 파일 공유 방식으로 전환한 뒤 일반 계정 접근을 다시 검증해야 한다. 앱 실행·cron 검증은 아직 완료되지 않았다.
-
-| 증상 | 확인과 조치 |
-| --- | --- |
-| Docker 연결 실패 | Docker Desktop 실행 후 `docker context ls`, `docker info` 확인. |
-| SSH 연결·인증 실패 | setup 수행 여부, `sshd -t`, `sshd -T`, admin 비밀번호, `docker compose port agent 20022` 확인. |
-| 재생성 후 SSH 호스트 키 변경 | 컨테이너의 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`로 지문을 확인한 뒤 해당 localhost 기록 갱신. |
-| UFW 설정 실패 | `NET_ADMIN`, `iptables -L -n`, `ufw status verbose` 확인. privileged 모드로 우회하지 않음. |
-| 권한·키 충돌 | `id`, `getfacl`, `readlink`로 확인하고 기존 데이터를 검토한 뒤 충돌 해결. |
-| 바인드 마운트 권한 검증 실패 | `stat` 소유자·그룹·setgid와 일반 계정 접근을 확인. Docker Desktop 파일 공유 설정을 검토하고 권한 검사를 생략하지 않음. |
-| 앱 실행 실패 | 실제 Boot 출력과 `ldd` 결과 확인. 앱을 Root로 실행하거나 검사를 변경하지 않음. |
-| cron 기록 없음 | 앱 실행 상태, admin의 `crontab -l`, cron 프로세스와 `/var/lib/agent-evidence/cron.log` 확인. |
-
-4-2를 시작할 때 검증된 Dockerfile을 복사하고 원본 커밋 또는 체크섬을 기록한다. 이미지·컨테이너·호스트 저장 경로는 별도로 만들고 계정·권한·cron 전체를 복사하지 않는다.
-
-제출물: [수행 내역서](docs/report.md), [모니터링 소스](monitor.sh).
+4-2에서는 검증된 Dockerfile만 재사용하고 이미지·계정·모니터링·볼륨을 분리한다.
