@@ -8,15 +8,19 @@ services:
 
     # UFW requires NET_ADMIN; startup runs SSH and cron only.
     cap_add: [NET_ADMIN]
-    command: ["/bin/bash", "/workspace/start.sh"]
+    command: ["/bin/bash", "/workspace/scripts/start.sh"]
 
     ports:
       - "127.0.0.1:20022:20022"
       - "127.0.0.1:15034:15034"
 
     volumes:
-      # Keep source read-only and store runtime data in the ignored logs directory.
-      - .:/workspace:ro
-      - ./logs/app-data:/home/agent-admin/agent-app
-      - ./logs/agent-app:/var/log/agent-app
-      - ./logs/evidence:/var/lib/agent-evidence
+      # Linux volumes preserve account permissions and ACLs.
+      - ./scripts:/workspace/scripts:ro
+      - ./agent-app:/workspace/agent-app:ro
+      - app_data:/home/agent-admin/agent-app
+      - app_logs:/var/log/agent-app
+
+volumes:
+  app_data:
+  app_logs:
