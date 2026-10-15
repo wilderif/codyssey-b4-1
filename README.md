@@ -15,7 +15,7 @@ ssh -p 20022 agent-admin@127.0.0.1
 ```
 
 - [start.sh](scripts/start.sh)는 SSH·cron만 시작한다. 재시작·재생성 후에는 [setup.sh](scripts/setup.sh)를 다시 실행한다. 비밀번호는 대화형으로 설정하며 재생성 후 다시 설정한다.
-- SSH는 20022이며 Root 로그인을 차단한다. UFW는 TCP 20022·15034만 허용하고, 호스트에는 두 포트를 localhost로만 공개한다. UFW 적용에 `NET_ADMIN`을 사용한다.
+- SSH는 20022이며 Root 로그인을 차단한다. setup은 UFW 규칙을 초기화하고 TCP 20022·15034만 허용한다. 호스트에는 두 포트를 localhost로만 공개하며, UFW 적용에 `NET_ADMIN`을 사용한다.
 - 세 계정 모두 `agent-common`, admin/dev만 `agent-core`에 속한다. 업로드는 common, 키·로그·monitor는 core 접근으로 제한하며 setgid·기본 ACL로 그룹 접근을 유지한다.
 - 데이터·로그는 전용 named volume `app_data`·`app_logs`에 저장한다. setup은 기존 키·로그를 보존하며 키 충돌 시 중단한다. `docker compose down`은 볼륨을 보존하고, `down -v`는 삭제한다.
 
@@ -45,6 +45,7 @@ tail -n 5 /var/log/agent-app/monitor.log
 ```
 
 - monitor는 `agent-dev:agent-core`, 권한 `750`이며 admin의 cron에서 매분 실행된다. 리슨 PID의 실행 파일·계정을 확인하고 앱·포트 이상이면 종료 코드 1을 반환한다.
+- `monitor.log` 생성·권한 설정은 setup에서 수행하고, monitor는 자원 수집·기록·회전을 담당한다.
 - CPU는 `vmstat 1 2`의 두 번째 표본에서 `100-idle`, 메모리는 `(MemTotal-MemAvailable)/MemTotal`, 디스크는 `df -P /`로 수집한다. 컨테이너에서 보이는 Docker Linux 시스템 기준이다.
 - CPU `>20%`, MEM `>10%`, DISK_USED `>80%`이면 경고한다. 임계값 초과와 UFW 비활성·조회 실패는 수집을 중단하지 않는다.
 - 다음 행으로 10,000,000바이트를 초과하면 Bash에서 압축·회전한다. 활성 `monitor.log`와 `.1.gz`~`.9.gz`까지 최대 열 개를 유지하며 앱 로그는 변경하지 않는다.

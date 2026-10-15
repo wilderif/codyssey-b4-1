@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-# Start services without systemd; keep SSH in the foreground.
-install -d -m 0755 /run/sshd
-ssh-keygen -A
-/usr/sbin/sshd -t
+mkdir -p /run/sshd
 /usr/sbin/cron
-exec /usr/sbin/sshd -D -e
+
+# Keep SSH in the foreground as the container's main process.
+exec /usr/sbin/sshd -D

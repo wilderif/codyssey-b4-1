@@ -6,7 +6,7 @@ services:
     image: codyssey-b4-1:local
     platform: linux/arm64
 
-    # UFW requires NET_ADMIN; startup runs SSH and cron only.
+    # Required for UFW.
     cap_add: [NET_ADMIN]
     command: ["/bin/bash", "/workspace/scripts/start.sh"]
 
@@ -22,7 +22,6 @@ services:
       - "127.0.0.1:15034:15034"
 
     volumes:
-      # Linux volumes preserve account permissions and ACLs.
       - ./scripts:/workspace/scripts:ro
       - ./agent-app:/workspace/agent-app:ro
       - app_data:/home/agent-admin/agent-app
