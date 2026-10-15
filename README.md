@@ -1,6 +1,8 @@
 # Linux 보안·모니터링 실습
 
-Ubuntu 22.04 ARM64에서 앱을 일반 계정으로 실행하고 Bash·cron으로 상태를 기록한다. 제출물: [수행 내역서](docs/report.md), [monitor.sh](scripts/monitor.sh).
+Ubuntu 22.04 ARM64에서 앱을 일반 계정으로 실행하고 Bash·cron으로 상태를 기록한다.
+
+제출물: [수행 내역서](docs/report.md), [monitor.sh](scripts/monitor.sh).
 
 ## 실행 가이드
 
