@@ -1,56 +1,121 @@
 # 요구사항 수행 내역
 
-아래는 간소화 이전 구현의 실행 검증 기록이다. 당시 README의 build·up·setup 명령으로 설정을 적용하고 Bash 문법·Compose 설정·이미지 빌드 검사를 통과했다.
+검증 환경: Ubuntu 22.04.5 LTS · ARM64 · Docker. 로그 날짜·시각은 마스킹했다. Bash 문법 검사, Compose 설정 검사, 이미지 빌드와 setup 실행을 통과했다. 설정은 컨테이너 root로, 앱·monitor·cron은 `agent-admin`으로 확인했다. SSH 접속에는 임시 키 인증을 사용했다.
 
-현재 파일은 설치 편의 설정·상세 오류 추적·중복 실행 잠금·중복 검증을 제거하고, UFW 규칙을 초기화한 뒤 과제 포트만 허용하도록 정리했다. 앱 환경변수는 Compose에서 관리하며 setup이 SSH 로그인 환경에 기록한다. 변경 후 Bash 문법·diff 공백 검사만 통과했으며, 빌드·스크립트 실행·SSH 환경변수 전달·동작 검증은 수행하지 않았다.
+## 1. SSH 포트 변경 및 Root 원격 접속 차단
 
-## 환경·보안·권한
+```bash
+/usr/sbin/sshd -t
+/usr/sbin/sshd -T | grep -E '^(port|permitrootlogin|passwordauthentication) '
+ss -ltnp 'sport = :20022'
+```
 
-| 항목 | 실행 결과 |
-| --- | --- |
-| 환경 | Ubuntu 22.04.5 LTS, `aarch64`. 설치 앱 `750`, `ldd` 의존성 해결. 제공 바이너리 원본은 변경하지 않음. |
-| 저장소 | `codyssey-b4-1_app_data`·`codyssey-b4-1_app_logs`. 스크립트·제공 바이너리만 읽기 전용 마운트. |
-| SSH | `sshd -t` 성공, 유효 설정은 아래 출력과 같음. 20022 리슨, admin 비밀번호 로그인 성공, 유효한 임시 비밀번호를 사용한 Root 로그인 거부. |
-| UFW | 활성, 기본 inbound deny/outbound allow. TCP 20022·15034만 허용(IPv4·IPv6). |
-| 그룹 | `id`에서 admin/dev/test 모두 `agent-common`, admin/dev만 `agent-core` 확인. |
-
-`sshd -T`와 `ufw status` 출력:
+`sshd -t` 종료 코드 0. 유효 설정과 리슨 상태:
 
 ```text
 port 20022
 permitrootlogin no
 passwordauthentication yes
+LISTEN 0 128 0.0.0.0:20022 0.0.0.0:* users:(("sshd",pid=1,fd=3))
+LISTEN 0 128 [::]:20022    [::]:*    users:(("sshd",pid=1,fd=4))
+```
+
+호스트 공개 주소: `127.0.0.1:20022`, `127.0.0.1:15034`.
+
+## 2. 방화벽 활성화 및 허용 포트
+
+`ufw status verbose` 결과:
+
+```text
 Status: active
+Default: deny (incoming), allow (outgoing), deny (routed)
+
 20022/tcp                  ALLOW IN    Anywhere
 15034/tcp                  ALLOW IN    Anywhere
 20022/tcp (v6)             ALLOW IN    Anywhere (v6)
 15034/tcp (v6)             ALLOW IN    Anywhere (v6)
 ```
 
-`stat`·`getfacl`로 확인한 디렉토리 정책이다. `$AGENT_HOME=/home/agent-admin/agent-app`이며 디렉토리 소유자는 `agent-admin`이다.
+`agent-admin`의 sudo 허용 명령은 `/usr/sbin/ufw status`뿐이다. 상태 조회는 성공했고 `sudo -n /usr/sbin/ufw disable`은 거부됐다.
 
-| 경로 | 그룹·권한·ACL |
-| --- | --- |
-| `/home/agent-admin` | `agent-admin`, 소유자 `rwx`; common에는 traversal `--x` ACL만 허용. ACL mask `--x`. |
-| `$AGENT_HOME` | `agent-common`, `710`. |
-| `$AGENT_HOME/upload_files` | `agent-common`, `2770`. |
-| `$AGENT_HOME/api_keys`, `$AGENT_HOME/bin`, `/var/log/agent-app` | `agent-core`, `2770`. |
-| `$AGENT_HOME/bin/monitor.sh` | `agent-dev:agent-core`, `750`. |
+## 3. 계정·그룹 생성
 
-`2770` 디렉토리의 기본 ACL은 user/group/mask `rwx`, other `---`다. `runuser`로 파일 생성·읽기·삭제를 검증했다. 세 계정의 업로드 접근, admin/dev의 키·로그 접근은 성공했고 test의 키 링크 읽기·로그 목록·monitor 실행은 거부됐다. 새 공유 파일은 common `660`, 하위 디렉토리는 common `2770`을 상속했다.
-
-## 앱 실행·키 경로 예외
-
-당시에는 일반 계정에서 환경변수 다섯 개를 수동으로 `export`한 뒤 실행했다. 명세의 파일형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key`로 먼저 실행한 결과는 종료 코드 1이었다.
+`id agent-admin`, `id agent-dev`, `id agent-test` 결과:
 
 ```text
-[1/5] Checking User Account               [OK]
-[2/5] Verifying Environment Variables     [FAIL]
-   >>> Key Path Mismatch. Expected: /home/agent-admin/agent-app/api_keys
-System Boot Failed. Process Terminated.
+uid=2001(agent-admin) gid=2001(agent-admin) groups=2001(agent-admin),2101(agent-common),2102(agent-core)
+uid=2002(agent-dev) gid=2002(agent-dev) groups=2002(agent-dev),2101(agent-common),2102(agent-core)
+uid=2003(agent-test) gid=2003(agent-test) groups=2003(agent-test),2101(agent-common)
 ```
 
-승인된 디렉토리형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys`로 별도 실행한 출력:
+`getent group agent-common agent-core` 결과:
+
+```text
+agent-common:x:2101:agent-admin,agent-dev,agent-test
+agent-core:x:2102:agent-admin,agent-dev
+```
+
+## 4. 디렉토리 구조·권한·ACL
+
+`stat -c '%U:%G %a %n'`과 `getfacl`로 확인했다. `$AGENT_HOME=/home/agent-admin/agent-app`이다.
+
+| 경로 | 소유자:그룹 | 권한 |
+| --- | --- | --- |
+| `$AGENT_HOME` | agent-admin:agent-common | 710 |
+| `$AGENT_HOME/upload_files` | agent-admin:agent-common | 2770 |
+| `$AGENT_HOME/api_keys` | agent-admin:agent-core | 2770 |
+| `$AGENT_HOME/bin` | agent-admin:agent-core | 2770 |
+| `/var/log/agent-app` | agent-admin:agent-core | 2770 |
+| `$AGENT_HOME/api_keys/t_secret.key` | agent-admin:agent-core | 660 |
+| `/var/log/agent-app/monitor.log` | agent-admin:agent-core | 660 |
+| `$AGENT_HOME/bin/monitor.sh` | agent-dev:agent-core | 750 |
+
+`/home/agent-admin`의 경로 통과 ACL:
+
+```text
+user::rwx
+group::---
+group:agent-common:--x
+mask::--x
+other::---
+```
+
+`upload_files`, `api_keys`, `bin`, `/var/log/agent-app`의 공통 ACL(setgid 적용):
+
+```text
+user::rwx
+group::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:mask::rwx
+default:other::---
+```
+
+`runuser -u <계정> -- ...`으로 일반 계정 권한을 확인했다.
+
+| 작업 | admin | dev | test |
+| --- | --- | --- | --- |
+| upload_files 파일 생성·읽기·삭제 | 성공 | 성공 | 성공 |
+| api_keys·bin·로그 디렉토리 파일 생성·읽기·삭제 | 성공 | 성공 | 거부 |
+
+새 업로드 파일은 `agent-common:660`을 상속했다. test의 monitor 실행도 `Permission denied`로 거부됐다.
+
+## 5. 앱 Boot Sequence 및 Agent READY
+
+SSH 로그인에서 `whoami`는 `agent-admin`, 환경변수는 다음과 같았다.
+
+```text
+AGENT_HOME=/home/agent-admin/agent-app
+AGENT_PORT=15034
+AGENT_UPLOAD_DIR=/home/agent-admin/agent-app/upload_files
+AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys
+AGENT_LOG_DIR=/var/log/agent-app
+```
+
+명세의 파일형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key`는 `Key Path Mismatch`로 종료 코드 1이었다. 승인된 호환 예외로 디렉토리형 경로와 상대 링크 `secret.key -> t_secret.key`를 사용했다. 키 내용은 `agent_api_key_test` 한 줄이다.
+
+`"$AGENT_HOME/agent-app-linux-arm64"` foreground 실행 결과:
 
 ```text
 [1/5] Checking User Account               [OK]
@@ -62,52 +127,68 @@ All Boot Checks Passed!
 Agent READY
 ```
 
-`t_secret.key` 내용은 `cmp`로 `agent_api_key_test` 한 줄과 일치함을 확인했고, `readlink secret.key`는 `t_secret.key`였다. 디렉토리형 경로와 상대 링크는 **명세 호환 예외**다.
-
-Docker TTY에서 `agent-admin` foreground 실행 후 `agent_app.log` 초기화와 `ss`의 `0.0.0.0:15034`, PID `1504`를 확인했다. 컨테이너 내부 SSH 클라이언트의 비밀번호 로그인에서도 Boot 5단계·READY·리슨 PID `389`를 확인했다. 두 실행 모두 Ctrl+C 후 포트가 해제됐다. 호스트 공개 포트는 `docker compose port`로 localhost 20022·15034를 별도 확인했다.
-
-## 모니터링·로그 회전
-
-실행: `docker compose exec -T -u agent-admin agent /home/agent-admin/agent-app/bin/monitor.sh`.
-
-| 검사 | 결과 |
-| --- | --- |
-| 정상 앱 | 리슨 PID의 실행 파일·계정 확인, 자원 수집·기록 성공. |
-| 앱 중지·다른 리스너 | 포트 미리슨 및 netcat 리스너를 각각 거부, 종료 코드 1. |
-| UFW 비활성·조회 실패 | 각각 `[WARNING]` 후 기록 성공. 시험 후 UFW·sudo 조회 권한 복구. |
-| 경고 경계 | CPU 20·MEM 10·DISK 80에서 경고 없음, 각 값에 0.01을 더하면 경고. |
-| 회전 크기 | 다음 행을 포함해 10,000,000바이트까지 유지, 초과 시 압축·회전. |
-| 보존·압축 | 13회 회전 후 활성 1개·gzip 9개, 압축 무결성·core `660` 확인. 앱 로그 유지. |
-| 압축 실패 | 오류·비정상 종료, 활성 로그 체크섬 유지. |
-
-CPU는 `vmstat 1 2`의 두 번째 표본에서 `100-idle`, 메모리는 `(MemTotal-MemAvailable)/MemTotal`, 디스크는 `df -P /`다. 컨테이너에서 보이는 Docker Linux 시스템 값이며 CPU는 정수 백분율로 수집한다.
-
-실제 정상 실행·메모리 경고 출력:
+`ss -ltnp 'sport = :15034'` 결과:
 
 ```text
-[OK] Application PID:1504 PORT:15034
-[WARNING] MEM 10.47% > 10%
-[2026-10-10 23:54:22] PID:1504 CPU:3.00% MEM:10.47% DISK_USED:2%
+LISTEN 0 1 0.0.0.0:15034 0.0.0.0:* users:(("agent-app-linux",pid=407,fd=4))
 ```
 
-회전·압축 실패·임계값 경계는 admin의 임시 디렉토리에서 실제 스크립트 함수를 사용해 검증했다. 실제 앱·monitor 로그는 시험에 사용하지 않았고, 실제 CPU·디스크 초과 경고는 발생시키지 않았다.
+`/var/log/agent-app/agent_app.log` 생성·기록과 제공 원본·설치 파일의 SHA-256 일치를 확인했다.
 
-## Cron·데이터 보존
+## 6. monitor.sh 실행 결과
 
-`crontab -u agent-admin -l` 등록 결과:
+`agent-admin`으로 `"$AGENT_HOME/bin/monitor.sh"` 실행, 종료 코드 0:
+
+```text
+[OK] Application PID:407 PORT:15034
+[WARNING] MEM 10.07% > 10%
+[YYYY-MM-DD HH:MM:SS] PID:407 CPU:2.00% MEM:10.07% DISK_USED:2%
+```
+
+CPU는 `vmstat 1 2`의 두 번째 표본, MEM은 `/proc/meminfo`의 MemTotal·MemAvailable, DISK는 `df -P /`로 수집한다. 측정 범위는 컨테이너에서 보이는 Linux 시스템이다.
+
+| 검증 | 결과 |
+| --- | --- |
+| 정상 앱 | 리슨 PID·실행 파일·계정 확인, 자원 기록, 종료 코드 0 |
+| UFW 비활성 | `[WARNING] UFW is inactive.`, 기록 지속, 종료 코드 0 |
+| UFW 조회 권한 임시 제거 | `[WARNING] Cannot query UFW: sudo: a password is required`, 기록 지속, 종료 코드 0 |
+| Ctrl+C로 앱 종료 | 15034 리슨 해제, `[ERROR] Application port 15034 is not listening.`, 종료 코드 1 |
+| 경고 경계 | CPU 20·MEM 10·DISK 80에서 경고 없음, 각각 +0.01에서 경고 |
+| 로그 회전 경계 | 다음 행 포함 10,000,000바이트까지 유지, 초과 시 gzip 회전 |
+| 로그 보관 개수 | 13회 회전 후 활성 1개·gzip 9개, gzip 무결성 검사 통과 |
+
+UFW와 조회 권한은 시험 후 복구했다. 경고 경계·로그 회전은 현재 monitor 함수를 임시 파일에서 검증했으며, 실제 monitor·앱 로그는 회전 시험에 사용하지 않았다.
+
+## 7. monitor.log 누적 기록
+
+`tail -n 3 /var/log/agent-app/monitor.log` 결과:
+
+```text
+[YYYY-MM-DD HH:MM:SS] PID:407 CPU:2.00% MEM:11.35% DISK_USED:2%
+[YYYY-MM-DD HH:MM:SS] PID:407 CPU:2.00% MEM:11.42% DISK_USED:2%
+[YYYY-MM-DD HH:MM:SS] PID:407 CPU:3.00% MEM:10.44% DISK_USED:2%
+```
+
+## 8. crontab 매분 등록 및 자동 실행
+
+`agent-admin`의 `crontab -l` 결과:
 
 ```cron
-* * * * * umask 0007; PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /home/agent-admin/agent-app/bin/monitor.sh >> /var/log/agent-app/cron.log 2>&1
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * /home/agent-admin/agent-app/bin/monitor.sh >> /var/log/agent-app/cron.log 2>&1
 ```
 
-`cron.log`·`monitor.log`에서 자동 실행을 확인했다. 아래 첫 두 행은 1분 간격 자동 샘플이고 마지막 행은 SSH 실행의 수동 샘플이다. 시각은 컨테이너의 UTC다.
+앱 실행 중 수동 monitor 실행 없이 60초 대기했다.
+
+| 확인 시점 | monitor.log 행 수 |
+| --- | --- |
+| 대기 전 | 1 |
+| 60초 후 | 2 |
+
+자동으로 추가된 monitor.log와 동일 시각의 cron.log 기록:
 
 ```text
-[2026-10-10 23:54:02] PID:1504 CPU:2.00% MEM:9.43% DISK_USED:2%
-[2026-10-10 23:55:02] PID:1504 CPU:0.00% MEM:10.99% DISK_USED:2%
-[2026-10-10 23:58:45] PID:389 CPU:0.00% MEM:8.80% DISK_USED:2%
+[OK] Application PID:407 PORT:15034
+[WARNING] MEM 12.63% > 10%
+[YYYY-MM-DD HH:MM:SS] PID:407 CPU:2.00% MEM:12.63% DISK_USED:2%
 ```
-
-setup 재실행 전후 키·monitor 로그 체크섬과 crontab이 일치했다. `docker compose up -d --force-recreate` 후 setup을 실행해 키·로그 보존과 monitor 권한·UFW·cron 재설정을 확인했다.
-
-검증 후 앱은 종료했고 UFW는 활성 상태다. SSH 시험용 비밀번호는 저장하지 않았으며 admin·Root 계정을 다시 잠갔다. 사용 시 README에 따라 admin 비밀번호를 설정한다. 원본 로그는 `app_logs` 볼륨에 남아 있고 로컬 증거 사본은 사용자 요청으로 삭제했다.
