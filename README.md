@@ -57,12 +57,15 @@ env | sort | grep '^AGENT_'
 docker compose ps
 docker compose exec --user root agent bash
 /usr/sbin/sshd -t
+cat /etc/ssh/sshd_config.d/00-agent.conf
 /usr/sbin/sshd -T | grep -E '^(port|permitrootlogin|passwordauthentication) '
 ss -ltnp 'sport = :20022'
 ufw status verbose
 id agent-admin
 id agent-dev
 id agent-test
+ls -ld "$AGENT_HOME" "$AGENT_HOME"/{upload_files,api_keys,bin} /var/log/agent-app
+ls -l "$AGENT_HOME/api_keys/" "$AGENT_HOME/bin/monitor.sh"
 stat -c '%U:%G %a %n' "$AGENT_HOME/bin/monitor.sh"
 getfacl /home/agent-admin "$AGENT_HOME" \
   "$AGENT_HOME"/{upload_files,api_keys,bin} /var/log/agent-app
@@ -72,10 +75,12 @@ exit
 | 명령·대상 | 기대 결과 |
 | --- | --- |
 | `docker compose ps` | `127.0.0.1`에 TCP `20022`, `15034`만 공개 |
+| 설정 파일 조회 | `Port 20022`, `PermitRootLogin no`, `PasswordAuthentication yes` |
 | `sshd -t` / `sshd -T` | 오류 없음 / `port 20022`, `permitrootlogin no`, `passwordauthentication yes` |
 | `ss` | sshd가 TCP `20022`에서 LISTEN |
 | `id` | 세 계정 모두 `agent-common`, admin·dev만 `agent-core` 포함 |
 | `ufw status verbose` | `active`, incoming `deny`·outgoing `allow`, TCP `20022`·`15034`만 허용(IPv4·IPv6) |
+| `ls -ld` / `ls -l` | 필수 디렉토리 구조·소유자·그룹·권한, `t_secret.key` 및 `secret.key -> t_secret.key` 확인 |
 | `stat` | monitor 소유자·그룹·권한: `agent-dev:agent-core 750` |
 | `getfacl`: home / AGENT_HOME | common에 경로 통과 `--x`, other 접근 없음 |
 | `getfacl`: upload_files | 그룹 `agent-common`, user/group `rwx`, other `---`, setgid·기본 ACL |
@@ -89,25 +94,30 @@ exit
 ssh -p 20022 agent-admin@127.0.0.1
 ```
 
-SSH 로그인 후 cron 등록 내용을 조회하고, 70초 후 자동 실행 로그를 확인한다.
+SSH 로그인 후 monitor를 직접 실행하고 cron 등록 내용을 조회한다. 이후 70초 동안 수동 실행 없이 자동 로그 증가를 확인한다.
 
 ```bash
 ss -ltnp 'sport = :15034'
+"$AGENT_HOME/bin/monitor.sh"
 crontab -l
 wc -l /var/log/agent-app/monitor.log
 sleep 70
 wc -l /var/log/agent-app/monitor.log
 tail -n 3 /var/log/agent-app/monitor.log
 tail -n 3 /var/log/agent-app/cron.log
+stat -c '%s %n' /var/log/agent-app/monitor.log
+ls -lh /var/log/agent-app/monitor.log*
 ```
 
 | 명령·대상 | 기대 결과 |
 | --- | --- |
 | `ss` / cron.log | `0.0.0.0:15034` LISTEN, 리슨 PID와 `[OK] Application PID:... PORT:15034`의 PID 일치 |
+| monitor 직접 실행 | 프로세스·포트 `[OK]`, 자원 로그 출력 |
 | 자원·경고 | Linux 시스템 CPU·MEM·root DISK_USED 기록. CPU `>20%`, MEM `>10%`, DISK_USED `>80%`일 때 `[WARNING]` 후 기록 지속 |
 | UFW 점검 | 비활성·조회 실패 시 경고 후 수집 지속 |
 | `crontab -l` | 명시적 PATH와 `* * * * * .../bin/monitor.sh` 작업 1개 |
 | `wc -l` / `tail` | 70초 후 행 수 증가, 최신 시각 갱신, cron.log에 자동 실행 결과 기록 |
+| `stat` / `ls -lh` | monitor.log 용량 관리: 최대 10MB/10개 파일 유지 |
 
 로그 형식과 보관 기준:
 
