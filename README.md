@@ -21,14 +21,11 @@ ssh -p 20022 agent-admin@127.0.0.1
 
 ## 앱 실행
 
-SSH의 `agent-admin` 세션에서 실행하고 **Ctrl+C**로 종료한다.
+환경변수 다섯 개는 [compose.yaml](compose.yaml)의 `environment`에서 관리한다. setup은 이 값을 `/etc/profile.d/agent-app.sh`에 기록해 `agent-admin`의 SSH 로그인 시 적용한다. 값을 변경하면 `docker compose up -d`로 컨테이너를 재생성하고 setup을 다시 실행한 뒤 SSH에 새로 접속한다.
+
+SSH의 `agent-admin` 세션에서 별도 `export` 없이 실행하고 **Ctrl+C**로 종료한다.
 
 ```bash
-export AGENT_HOME=/home/agent-admin/agent-app
-export AGENT_PORT=15034
-export AGENT_UPLOAD_DIR="$AGENT_HOME/upload_files"
-export AGENT_KEY_PATH="$AGENT_HOME/api_keys"
-export AGENT_LOG_DIR=/var/log/agent-app
 "$AGENT_HOME/agent-app-linux-arm64"
 ```
 

@@ -10,6 +10,13 @@ services:
     cap_add: [NET_ADMIN]
     command: ["/bin/bash", "/workspace/scripts/start.sh"]
 
+    environment:
+      AGENT_HOME: /home/agent-admin/agent-app
+      AGENT_PORT: "15034"
+      AGENT_UPLOAD_DIR: /home/agent-admin/agent-app/upload_files
+      AGENT_KEY_PATH: /home/agent-admin/agent-app/api_keys
+      AGENT_LOG_DIR: /var/log/agent-app
+
     ports:
       - "127.0.0.1:20022:20022"
       - "127.0.0.1:15034:15034"

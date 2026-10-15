@@ -3,7 +3,7 @@ set -Eeuo pipefail
 export LC_ALL=C
 trap 'echo "[ERROR] Setup failed at line $LINENO" >&2' ERR
 
-agent_home=/home/agent-admin/agent-app
+agent_home=${AGENT_HOME:?Run setup with the compose.yaml environment.}
 source_app=/workspace/agent-app/agent-app-linux-arm64
 key_file=$agent_home/api_keys/t_secret.key
 key_link=$agent_home/api_keys/secret.key
@@ -21,7 +21,6 @@ prepare_directory() {
 [[ $EUID -eq 0 ]] || fail 'Run setup as root inside the container.'
 [[ -f $source_app && -f /workspace/scripts/monitor.sh ]] || fail 'Missing application or monitor source.'
 bash -n /workspace/scripts/monitor.sh
-iptables -L -n >/dev/null
 
 # Preserve the fixture and reject conflicting existing key data.
 if [[ -e $key_file || -L $key_file ]]; then
@@ -46,6 +45,16 @@ usermod -aG agent-core agent-dev
 if id -nG agent-test | grep -qw agent-core; then
     fail 'agent-test must not belong to agent-core.'
 fi
+
+# Copy Compose settings into agent-admin's SSH login environment.
+{
+    printf 'if [ "$(id -un)" = agent-admin ]; then\n'
+    for variable in AGENT_HOME AGENT_PORT AGENT_UPLOAD_DIR AGENT_KEY_PATH AGENT_LOG_DIR; do
+        printf '    export %s=%q\n' "$variable" "${!variable}"
+    done
+    printf 'fi\n'
+} > /etc/profile.d/agent-app.sh
+chmod 0644 /etc/profile.d/agent-app.sh
 
 chown agent-admin:agent-admin /home/agent-admin
 chmod 0700 /home/agent-admin

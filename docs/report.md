@@ -1,6 +1,8 @@
 # 요구사항 수행 내역
 
-간소화한 `scripts/`와 named volume 환경에서 실행한 검증 결과다. 설정은 README의 build·up·setup 명령으로 적용했다. Bash 문법·Compose 설정·이미지 빌드 검사를 통과했다.
+아래는 패키지 정리·환경변수 설정 변경 이전의 `scripts/`와 named volume 환경에서 실행한 검증 기록이다. 당시 README의 build·up·setup 명령으로 설정을 적용하고 Bash 문법·Compose 설정·이미지 빌드 검사를 통과했다.
+
+현재 파일에서는 `findutils`·`file`·`netcat-openbsd` 설치 항목과 setup의 별도 `iptables` 사전 조회를 제거했다. 앱 환경변수 다섯 개는 Compose에서 관리하고 setup이 `agent-admin`의 SSH 로그인 환경에 적용하도록 변경했다. 이번 변경은 파일 수정만 수행했으며, 변경 후 빌드·스크립트 실행·SSH 환경변수 전달·동작 검증은 수행하지 않았다.
 
 ## 환경·보안·권한
 
@@ -39,7 +41,7 @@ Status: active
 
 ## 앱 실행·키 경로 예외
 
-일반 계정에 README의 환경 변수 다섯 개를 지정했다. 명세의 파일형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key`로 먼저 실행한 결과는 종료 코드 1이었다.
+당시에는 일반 계정에서 환경변수 다섯 개를 수동으로 `export`한 뒤 실행했다. 명세의 파일형 `AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key`로 먼저 실행한 결과는 종료 코드 1이었다.
 
 ```text
 [1/5] Checking User Account               [OK]
