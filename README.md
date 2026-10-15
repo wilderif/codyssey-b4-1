@@ -17,7 +17,7 @@ ssh -p 20022 agent-admin@127.0.0.1
 - [start.sh](scripts/start.sh)는 SSH·cron만 시작한다. 재시작·재생성 후에는 [setup.sh](scripts/setup.sh)를 다시 실행한다. 비밀번호는 대화형으로 설정하며 재생성 후 다시 설정한다.
 - SSH는 20022이며 Root 로그인을 차단한다. setup은 UFW 규칙을 초기화하고 TCP 20022·15034만 허용한다. 호스트에는 두 포트를 localhost로만 공개하며, UFW 적용에 `NET_ADMIN`을 사용한다.
 - 세 계정 모두 `agent-common`, admin/dev만 `agent-core`에 속한다. 업로드는 common, 키·로그·monitor는 core 접근으로 제한하며 setgid·기본 ACL로 그룹 접근을 유지한다.
-- 데이터·로그는 전용 named volume `app_data`·`app_logs`에 저장한다. setup은 기존 키·로그를 보존하며 키 충돌 시 중단한다. `docker compose down`은 볼륨을 보존하고, `down -v`는 삭제한다.
+- 데이터·로그는 전용 named volume `app_data`·`app_logs`에 저장한다. setup은 기존 키·로그를 보존하며 키 충돌 시 중단한다.
 
 ## 앱 실행
 
@@ -56,3 +56,23 @@ tail -n 5 /var/log/agent-app/monitor.log
 ```
 
 4-2에서는 검증된 Dockerfile만 재사용하고 이미지·계정·모니터링·볼륨을 분리한다.
+
+## 종료
+
+앱을 실행한 SSH 세션에서 **Ctrl+C**로 앱을 종료한다. 이후 열려 있는 각 SSH 세션에서 접속을 종료한다.
+
+```bash
+exit
+```
+
+호스트의 프로젝트 디렉터리에서 컨테이너와 프로젝트 네트워크를 제거한다. 데이터·로그 볼륨은 보존된다.
+
+```bash
+docker compose down
+```
+
+데이터·로그 볼륨까지 모두 삭제하려는 경우에만 다음 명령을 사용한다. 저장된 앱 데이터·키·로그도 삭제된다.
+
+```bash
+docker compose down -v
+```
